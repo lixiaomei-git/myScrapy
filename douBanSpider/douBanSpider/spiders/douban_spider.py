@@ -7,6 +7,7 @@ sys.setdefaultencoding('utf-8')
 from scrapy.spider import BaseSpider
 from scrapy.http import Request
 from ..items import DoubanspiderItem
+import json
 import re
 
 class DouBanSpider(BaseSpider):
@@ -17,16 +18,58 @@ class DouBanSpider(BaseSpider):
     def parse(self, response):
         rank_links = response.css('.types').xpath('.//span/a/@href').extract()
         for rank_link in rank_links:
-            print self.allowed_domains[0]+rank_link
-            yield Request(self.allowed_domains[0]+rank_link,callback=self.parse_list,dont_filter=True)
+            new_link = (self.allowed_domains[0]+rank_link).replace('typerank','j/chart/top_list')+"&start=0&limit=20"
+            yield Request(new_link,callback=self.parse_list,dont_filter=True)
 
     def parse_list(self,response):
-        movie_list = response.css('.movie-list-panel list')
-        for movie in movie_list:
-            movie_link = movie.xpath('.//span/a/@href').extract()
-            print self.allowed_domains[0]+movie_link
-            yield Request(self.allowed_domains[0]+movie_link, callback=self.parse_movie,dont_filter=True)
+        movie_json = json.loads(response.body)
+        for each in movie_json:
+            yield Request(each['url'],callback = self.parse_item,dont_filter=True)
 
-    def parse_movie(self,response):
-        print "88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888"
-        print response
+    def parse_item(self, response):
+        movie_name = response.xpath('//*[@id="content"]/h1/span[1]/text()').extract()
+        movie_director = response.xpath('//*[@id="info"]/span[1]/span[2]/a/text()').extract()
+        movie_writer = response.xpath('//*[@id="info"]/span[2]/span[2]/a/text()').extract()
+        movie_detail = response.xpath('//*[@id="info"]').extract()
+        movie_description_paths = response.xpath('//*[@id="link-report"]')
+        movie_description = []
+        for movie_description_path in movie_description_paths:
+            movie_description = movie_description_path.select('.//*[@property="v:summary"]/text()').extract()
+
+        movie_roles_paths = response.xpath('//*[@id="info"]/span[3]/span[2]')
+        movie_roles = []
+        for movie_roles_path in movie_roles_paths:
+            movie_roles = movie_roles_path.xpath('.//*[@rel="v:starring"]/text()').extract()
+
+        item = DoubanspiderItem()
+        item['movie_name'] = ''.join(movie_name).strip().replace(',',';').replace('\'','\\\'').replace('\"','\\\"').replace(':',';').decode("utf8")
+        item['movie_director'] = movie_director[0].strip().replace(',', ';').replace('\'', '\\\'').replace('\"','\\\"').replace(':', ';').decode("utf8") if len(movie_director) > 0 else ''
+        item['movie_description'] = movie_description[0].strip().replace(',', ';').replace('\'', '\\\'').replace('\"','\\\"').replace(':',';').decode("utf8") if len(movie_description) > 0 else ''
+        item['movie_writer'] = ';'.join(movie_writer).strip().replace(',', ';').replace('\'', '\\\'').replace('\"','\\\"').replace(':', ';').decode("utf8")
+        item['movie_roles'] = ';'.join(movie_roles).strip().replace(',', ';').replace('\'', '\\\'').replace('\"','\\\"').replace(':', ';').decode("utf8")
+        movie_detail_str = ''.join(movie_detail).strip()
+        movie_language_str = ".*语言:</span> (.+?)<br><span.*".decode("utf8")
+        movie_date_str = ".*上映日期:</span> <span property=\"v:initialReleaseDate\" content=\"(\S+?)\">(\S+?)</span>.*".decode("utf8")
+        movie_long_str = ".*片长:</span> <span property=\"v:runtime\" content=\"(\d+).*".decode("utf8")
+
+        pattern_language = re.compile(movie_language_str, re.S)
+        pattern_date = re.compile(movie_date_str, re.S)
+        pattern_long = re.compile(movie_long_str, re.S)
+
+        movie_language = re.search(pattern_language, movie_detail_str)
+        movie_date = re.search(pattern_date, movie_detail_str)
+        movie_long = re.search(pattern_long, movie_detail_str)
+
+        item['movie_language'] = ""
+        if movie_language:
+            item['movie_language'] = movie_language.group(1).strip().replace(',', ';').replace('\'', '\\\'').replace('\"','\\\"').replace(':',';')
+
+        item['movie_date'] = ""
+        if movie_date:
+            item['movie_date'] = movie_date.group(1).strip().replace(',',';').replace('\'','\\\'').replace('\"','\\\"').replace(':',';')
+
+        item['movie_long'] = ""
+        if movie_long:
+            item['movie_long'] = movie_long.group(1)
+
+        yield item
